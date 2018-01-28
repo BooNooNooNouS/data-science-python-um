@@ -1,10 +1,14 @@
 import numpy as np
 import pandas as pd
+import os
 
+rootdir =  os.path.join(os.path.dirname(os.path.realpath(__file__)), 'course1_downloads/')
 
-rootdir =  '/Users/karlan/personal/dataScienceCoursera/01-introToDataScience/course1_downloads/coursera-data-science/'
 filename= 'City_Zhvi_AllHomes.csv'
 
+import os.path
+assert os.path.isfile(rootdir + filename)
+print("file exists")
 
 # ### Load gdp variable ###
 # GDP = pd.read_csv(filename, skiprows=4,
@@ -46,60 +50,22 @@ def get_gdp_data():
     gdp = pd.read_excel(rootdir + 'gdplev.xls',
                            sheet_name='Sheet1',
                            skiprows=219,
-                           skip_footer=38,
-                           usecols=[4, 5],
+                           usecols=[4, 6],
                            names=['quarter', 'gdp'])
     return gdp
 
 
-def get_zillow_data():
-    import math
-    zillow = pd.read_csv(rootdir + 'City_Zhvi_AllHomes.csv')
-    start_year = 1996
-    start_month = 4
-    end_year = 2016
-    end_month = 6 # technically it stops at 8
-
-    current_year = start_year
-    current_month_start = start_month
-    while current_year < end_year or (current_year == end_year and current_month_start < end_month):
-        current_month_end = current_month_start + 3
-        if current_year == end_year and current_month_end > end_month:
-            current_month_end = end_month
-        q_index = math.floor(current_month_start / 3) + 1
-        colname = "{}q{}".format(current_year, q_index)
-        cols = ["{}-{:02d}".format(current_year, m) for m in range(current_month_start, current_month_end)]
-        zillow[colname] = zillow[cols].sum(axis='columns')
-        #print("{}: {}".format(colname, cols))
-
-        current_month_start += 3
-        # reset the year
-        if current_month_start >= 12:
-            current_year += 1
-            current_month_start = 1
-
-    return zillow
-
 def get_growth_analysis():
-    recession = get_zillow_data()
-    quarter_columns = [x for x in recession.columns if x[:2].isnumeric() and x[4] == "q"]
 
-    # these are already ordered
-    sum_gdp = [recession[quarter].sum() for quarter in quarter_columns]
+    recession = get_gdp_data().reset_index()
 
-    previous_idx = 0
+    recession['change'] = 'NA'
+    for idx in range(1, len(recession)):
+        recession.loc[idx, 'change'] = 'GROWTH' \
+            if recession.loc[idx, 'gdp'] > recession.loc[idx-1, 'gdp'] \
+            else 'DECLINE'
 
-    # list of GT, LT, EQ evaluating whether the current value is less than or greater than the previous one
-    growth_analysis = ["NA"]
-    for idx in range(1, len(quarter_columns)):
-        if sum_gdp[idx] > sum_gdp[idx - 1]:
-            growth_analysis.append("GROWTH")
-        elif sum_gdp[idx] < sum_gdp[idx - 1]:
-            growth_analysis.append("DECLINE")
-        else:
-            growth_analysis.append("NA")
-
-    return pd.DataFrame(data={'quarter':quarter_columns, 'change': growth_analysis, 'sum_gdp': sum_gdp})
+    return recession
 
 
 
@@ -111,9 +77,9 @@ def get_recession_start():
 
     analysis = get_growth_analysis()
 
-    for idx in analysis.index - 1:
-        if analysis.iloc[idx]['change'] == "DECLINE" and analysis.iloc[idx+1]['change'] == "DECLINE":
-            return analysis.iloc[idx]['quarter']
+    for idx in range(len(analysis.index) - 1):
+        if analysis.loc[idx, 'change'] == "DECLINE" and analysis.loc[idx+1, 'change'] == "DECLINE":
+            return analysis.loc[idx, 'quarter']
     # it's possible a recession hasn't started yet
     return None
 
@@ -144,8 +110,8 @@ def get_recession_bottom():
     recession_end = get_recession_end()
 
     subset = analysis[(analysis['quarter'] >= recession_start) & (analysis['quarter'] < recession_end)]
-    min_gdp = subset['sum_gdp'].min()
-    return subset[subset['sum_gdp'] == min_gdp].reset_index().loc[0, 'quarter']
+    min_gdp = subset['gdp'].min()
+    return subset[subset['gdp'] == min_gdp].reset_index().loc[0, 'quarter']
 
 
 def convert_housing_data_to_quarters():
@@ -177,7 +143,7 @@ def convert_housing_data_to_quarters():
         q_index = math.floor(current_month_start / 3) + 1
         colname = "{}q{}".format(current_year, q_index)
         cols = ["{}-{:02d}".format(current_year, m) for m in range(current_month_start, current_month_end)]
-        recession[colname] = recession[cols].mean(axis='columns')
+        recession[colname] = recession[cols].mean(axis='columns', skipna=True)
         desired_columns.append(colname)
         # print("{}: {}".format(colname, cols))
 
@@ -217,13 +183,11 @@ def run_ttest():
     recession_start = get_recession_start()
     recession_bottom = get_recession_bottom()
 
-    subset['ratio'] = subset[recession_bottom] - subset[recession_start]
+    subset['ratio'] = subset[recession_start].div(subset[recession_bottom])
     univ_towns_df = get_list_of_university_towns()
     univ_town_tuples = univ_towns_df.to_records(index=False).tolist()
 
-    ss = subset.reset_index()
-    ss['State'] = ss['State'].map(states)
-    ss = ss.set_index(['State', 'RegionName'])
+    ss = subset.reset_index().set_index(['State', 'RegionName'])
 
     univ_towns_subset = ss.loc[ss.index.isin(univ_town_tuples)]
     non_univ_towns_subset = ss.loc[~ss.index.isin(univ_town_tuples)]
@@ -231,8 +195,8 @@ def run_ttest():
     tt_result = stats.ttest_ind(univ_towns_subset['ratio'],
                     non_univ_towns_subset['ratio'],
                     nan_policy='omit')
-    univ_mean = univ_towns_subset['ratio'].mean()
-    non_univ_mean = non_univ_towns_subset['ratio'].mean()
+    univ_mean = univ_towns_subset['ratio'].mean(skipna=True)
+    non_univ_mean = non_univ_towns_subset['ratio'].mean(skipna=True)
     return(tt_result.pvalue < 0.01,
            tt_result.pvalue,
            "university town" if univ_mean < non_univ_mean else "non-university town")
@@ -340,20 +304,39 @@ def test_queston_1():
     print('RegionName test: ', "Passed" if len(regDiff) ==
                                            0 else ' \nMismatching regionNames\n {}'.format(regDiff))
 
+# test output type (different, p, better)
+def test_q6():
+    q6 = run_ttest()
+    different, p, better = q6
+
+    res = 'Type test: '
+    res += ['Failed\n','Passed\n'][type(q6) == tuple]
+
+    res += 'Test "different" type: '
+    res += ['Failed\n','Passed\n'][type(different) == bool or type(different) == np.bool_]
+
+    res += 'Test "p" type: '
+    res += ['Failed\n','Passed\n'][type(p) == np.float64]
+
+    res +='Test "better" type: '
+    res += ['Failed\n','Passed\n'][type(better) == str]
+    if type(better) != str:
+        res +='"better" should be a string with value "university town" or  "non-university town"'
+        return res
+    res += 'Test "different" spelling: '
+    res += ['Failed\n','Passed\n'][better in ["university town", "non-university town"]]
+    return res
 
 if __name__ == "__main__":
-    get_list_of_university_towns().to_csv("dataframeuniv.csv")
-    test_queston_1()
-    # university_towns = get_list_of_university_towns()
-    # assert all(university_towns.columns.isin(["State", "RegionName"]))
-
-    # print("get_list_of_university_towns: {}".format(get_list_of_university_towns()))
+    # get_list_of_university_towns().to_csv("dataframeuniv.csv")
+    # test_queston_1()
     # print("Recession started in " + get_recession_start())
     # print("And ended in " + get_recession_end())
     # print("With the recession bottom in" + get_recession_bottom())
-
-    import numpy
-    assert type(convert_housing_data_to_quarters().loc["Texas"].loc["Austin"].loc["2010q3"]) == numpy.float64
+    #
+    # import numpy
+    # print(convert_housing_data_to_quarters().loc["Texas"].loc["Austin"].loc["2010q3"])
+    # assert type(convert_housing_data_to_quarters().loc["Texas"].loc["Austin"].loc["2010q3"]) == numpy.float64
 
     # x = convert_housing_data_to_quarters()
     # assert all([x[:4].isnumeric() for x in x.columns])
@@ -363,5 +346,4 @@ if __name__ == "__main__":
     # assert len(x.index.names) == 2
     # assert x.index.names[0] == "State"
     # assert x.index.names[1] == "RegionName"
-    # print(run_ttest())
-
+    test_q6()
